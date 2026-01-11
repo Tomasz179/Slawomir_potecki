@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sterownik Wiatrowy – Dashboard</title>
+
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+  <style>
+    :root{ --card-w:1100px; }
+
+    body{
+      font-family: Arial, sans-serif;
+      padding:20px;
+      color:#111;
+      min-height:100vh;
+      margin:0;
+      background:#000;
+    }
+
+    .bg{
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      overflow: hidden;
+      background: url("assets/wiatrak.webp") center top / cover no-repeat;
+    }
+    .bg-video{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      object-position:center top;
+    }
+
+    .ui-overlay{
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -1;
+      background: linear-gradient(
+        to bottom,
+        rgba(255,255,255,0.00) 0%,
+        rgba(255,255,255,0.08) 35%,
+        rgba(255,255,255,0.18) 100%
+      );
+    }
+
+    #app{ position: relative; z-index: 1; }
+
+    h1{
+      text-align:center;
+      margin:8px 0 14px;
+      text-shadow:0 1px 0 rgba(255,255,255,0.6);
+    }
+
+    #status{
+      max-width:var(--card-w);
+      margin:0.5rem auto 1rem;
+      font-size:12px;
+      text-align:center;
+      text-shadow:0 1px 0 rgba(255,255,255,0.6);
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));
+      gap:12px;
+      max-width:var(--card-w);
+      margin:0 auto;
+    }
+
+    .card{
+      background: rgba(255,255,255,0.92);
+      padding:15px;
+      border-radius:14px;
+      box-shadow:0 10px 22px rgba(0,0,0,0.14);
+    }
+
+    .label{ font-weight:bold; }
+    .value{
+      float:right;
+      font-weight:700;
+      min-width: 90px;
+      text-align:right;
+      display:inline-block;
+    }
+    .unit{ margin-left:4px; color:#666; font-weight:500 }
+  </style>
+</head>
+
+<body>
+
+<div class="bg">
+  <video class="bg-video" autoplay muted loop playsinline>
+    <source src="assets/wiatrak.mp4" type="video/mp4">
+  </video>
+</div>
+<div class="ui-overlay"></div>
+
+<div id="app">
+  <h1>Sterownik Wiatrowy</h1>
+
+  <div id="status">
+    MQTT: <b id="mqttStatus">—</b>
+    <span id="diag"></span>
+  </div>
+
+  <div class="grid">
+
+    <!-- PANELE -->
+    <div class="card">
+      <span class="label">Napięcie paneli</span>
+      <span class="value"><span id="pv_v">—</span><span class="unit">V</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Prąd paneli</span>
+      <span class="value"><span id="pv_a">—</span><span class="unit">A</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Moc panele</span>
+      <span class="value"><span id="pv_p">—</span><span class="unit">W</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Panele kWh</span>
+      <span class="value"><span id="pv_kwh">—</span><span class="unit">kWh</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Prąd ładowania (panel)</span>
+      <span class="value"><span id="chg_pv_a">—</span><span class="unit">A</span></span>
+    </div>
+
+    <!-- BATERIA / TEMP -->
+    <div class="card">
+      <span class="label">Napięcie baterii</span>
+      <span class="value"><span id="bat_v">—</span><span class="unit">V</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Temperatura</span>
+      <span class="value"><span id="temp">—</span><span class="unit">°C</span></span>
+    </div>
+
+    <!-- WIATRAK -->
+    <div class="card">
+      <span class="label">Napięcie wiatrak</span>
+      <span class="value"><span id="wind_v">—</span><span class="unit">V</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Prąd wiatrak</span>
+      <span class="value"><span id="wind_a">—</span><span class="unit">A</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Moc wiatrak</span>
+      <span class="value"><span id="wind_p">—</span><span class="unit">W</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Prąd ładowania (wiatr)</span>
+      <span class="value"><span id="chg_wind_a">—</span><span class="unit">A</span></span>
+    </div>
+
+    <div class="card">
+      <span class="label">Wiatrak kWh</span>
+      <span class="value"><span id="wind_kwh">—</span><span class="unit">kWh</span></span>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(() => {
+  const PREFIX = "sterownik_wiatrowy";
+  const WS_URL = "wss://broker.hivemq.com:8884/mqtt";
+
+  const el = {
+    pv_v: document.getElementById('pv_v'),
+    pv_a: document.getElementById('pv_a'),
+    pv_p: document.getElementById('pv_p'),
+    pv_kwh: document.getElementById('pv_kwh'),
+    chg_pv_a: document.getElementById('chg_pv_a'),
+
+    bat_v: document.getElementById('bat_v'),
+    temp: document.getElementById('temp'),
+
+    wind_v: document.getElementById('wind_v'),
+    wind_a: document.getElementById('wind_a'),
+    wind_p: document.getElementById('wind_p'),
+    chg_wind_a: document.getElementById('chg_wind_a'),
+    wind_kwh: document.getElementById('wind_kwh'),
+
+    mqttStatus: document.getElementById('mqttStatus'),
+    diag: document.getElementById('diag'),
+  };
+
+  // ESPHome MQTT: <topic_prefix>/sensor/<object_id>/state
+  // object_id zwykle jest automatycznie generowany z "name" (polskie znaki => podwójne "_")
+  const TOPICS = {
+    pv_v:       `${PREFIX}/sensor/napi__cie_paneli/state`,
+    pv_a:       `${PREFIX}/sensor/pr__d_paneli/state`,
+    pv_p:       `${PREFIX}/sensor/moc_panele/state`,
+    pv_kwh:     `${PREFIX}/sensor/panele_kwh/state`,
+    chg_pv_a:   `${PREFIX}/sensor/pr__d___adowania__panel_/state`,
+
+    bat_v:      `${PREFIX}/sensor/napi__cie_baterii/state`,
+    temp:       `${PREFIX}/sensor/temperatura/state`,
+
+    wind_v:     `${PREFIX}/sensor/napi__cie_wiatrak/state`,
+    wind_a:     `${PREFIX}/sensor/pr__d_wiatrak/state`,
+    wind_p:     `${PREFIX}/sensor/moc_wiatrak/state`,
+    chg_wind_a: `${PREFIX}/sensor/pr__d___adowania__wiatr_/state`,
+    wind_kwh:   `${PREFIX}/sensor/wiatrak_kwh/state`,
+  };
+
+  function num(v){
+    const m = String(v).match(/-?\d+(?:[.,]\d+)?/);
+    return m ? parseFloat(m[0].replace(',','.')) : NaN;
+  }
+
+  // Format: domyślnie 1 miejsce po przecinku (jak w Twojej obecnej stronie)
+  const fmt1 = n => isNaN(n) ? "—" : n.toFixed(1).replace('.',',');
+  // Dla mocy czasem lepiej bez części dziesiętnej, ale zostawiamy spójnie 1 miejsce
+  // Jeśli chcesz, mogę dać osobno fmt0 dla W.
+
+  let msg = 0, last = 0;
+  const diag = () => {
+    el.diag.innerHTML = ` | msg: <b>${msg}</b> | last: <b>${last ? new Date(last).toLocaleTimeString() : "—"}</b>`;
+  };
+
+  const client = mqtt.connect(WS_URL, { clientId: "web_" + Math.random().toString(16).slice(2) });
+
+  client.on('connect', () => {
+    el.mqttStatus.textContent = "połączono";
+    Object.values(TOPICS).forEach(t => client.subscribe(t));
+  });
+
+  client.on('message', (t, p) => {
+    msg++; last = Date.now(); diag();
+    const v = num(p.toString());
+
+    if (t === TOPICS.pv_v)       el.pv_v.textContent = fmt1(v);
+    if (t === TOPICS.pv_a)       el.pv_a.textContent = fmt1(v);
+    if (t === TOPICS.pv_p)       el.pv_p.textContent = fmt1(v);
+    if (t === TOPICS.pv_kwh)     el.pv_kwh.textContent = fmt1(v);
+    if (t === TOPICS.chg_pv_a)   el.chg_pv_a.textContent = fmt1(v);
+
+    if (t === TOPICS.bat_v)      el.bat_v.textContent = fmt1(v);
+    if (t === TOPICS.temp)       el.temp.textContent = fmt1(v);
+
+    if (t === TOPICS.wind_v)     el.wind_v.textContent = fmt1(v);
+    if (t === TOPICS.wind_a)     el.wind_a.textContent = fmt1(v);
+    if (t === TOPICS.wind_p)     el.wind_p.textContent = fmt1(v);
+    if (t === TOPICS.chg_wind_a) el.chg_wind_a.textContent = fmt1(v);
+    if (t === TOPICS.wind_kwh)   el.wind_kwh.textContent = fmt1(v);
+  });
+
+  client.on('offline', () => el.mqttStatus.textContent = "offline");
+  client.on('error', () => el.mqttStatus.textContent = "błąd");
+})();
+</script>
+
+</body>
+</html>
